@@ -1,6 +1,6 @@
 
 import os, math, json, uuid, datetime, requests
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import pandas as pd
 import numpy as np
 from fastapi import FastAPI, Query
@@ -74,6 +74,189 @@ def fetch_ohlcv_bybit(symbol: str, tf: str, limit: int = 300, category: str = "s
                      "open": float(o), "high": float(h), "low": float(l),
                      "close": float(c), "volume": float(v)})
     return pd.DataFrame.from_records(recs)
+
+# ---------- Advanced Technical Analysis Functions ----------
+
+def find_order_blocks(df: pd.DataFrame, lookback: int = 20) -> Dict[str, List[Dict]]:
+    """Find order blocks (liquidity zones)"""
+    order_blocks = {"bullish": [], "bearish": []}
+    
+    for i in range(lookback, len(df) - 1):
+        current = df.iloc[i]
+        next_candle = df.iloc[i + 1]
+        
+        # Bullish order block (strong move up after consolidation)
+        if (next_candle['close'] > next_candle['open'] and  # Next candle is bullish
+            next_candle['close'] > current['high'] and      # Breaks above current high
+            current['volume'] > df['volume'].rolling(10).mean().iloc[i]):  # High volume
+            
+            order_blocks["bullish"].append({
+                "start_idx": i,
+                "high": current['high'],
+                "low": current['low'],
+                "strength": (next_candle['close'] - current['high']) / current['high'],
+                "volume_ratio": current['volume'] / df['volume'].rolling(10).mean().iloc[i]
+            })
+        
+        # Bearish order block (strong move down after consolidation)
+        elif (next_candle['close'] < next_candle['open'] and  # Next candle is bearish
+              next_candle['close'] < current['low'] and       # Breaks below current low
+              current['volume'] > df['volume'].rolling(10).mean().iloc[i]):  # High volume
+            
+            order_blocks["bearish"].append({
+                "start_idx": i,
+                "high": current['high'],
+                "low": current['low'],
+                "strength": (current['low'] - next_candle['close']) / current['low'],
+                "volume_ratio": current['volume'] / df['volume'].rolling(10).mean().iloc[i]
+            })
+    
+    return order_blocks
+
+def find_support_resistance_levels(df: pd.DataFrame, sensitivity: float = 0.02) -> Dict[str, List[float]]:
+    """Find support and resistance levels using pivot points"""
+    levels = {"support": [], "resistance": []}
+    
+    for i in range(2, len(df) - 2):
+        current = df.iloc[i]
+        
+        # Resistance level (local high)
+        if (current['high'] > df.iloc[i-1]['high'] and 
+            current['high'] > df.iloc[i-2]['high'] and
+            current['high'] > df.iloc[i+1]['high'] and
+            current['high'] > df.iloc[i+2]['high']):
+            
+            # Check if level is significant (not too close to existing levels)
+            is_significant = True
+            for level in levels["resistance"]:
+                if abs(current['high'] - level) / level < sensitivity:
+                    is_significant = False
+                    break
+            
+            if is_significant:
+                levels["resistance"].append(current['high'])
+        
+        # Support level (local low)
+        if (current['low'] < df.iloc[i-1]['low'] and 
+            current['low'] < df.iloc[i-2]['low'] and
+            current['low'] < df.iloc[i+1]['low'] and
+            current['low'] < df.iloc[i+2]['low']):
+            
+            # Check if level is significant
+            is_significant = True
+            for level in levels["support"]:
+                if abs(current['low'] - level) / level < sensitivity:
+                    is_significant = False
+                    break
+            
+            if is_significant:
+                levels["support"].append(current['low'])
+    
+    # Sort levels
+    levels["support"].sort(reverse=True)
+    levels["resistance"].sort()
+    
+    return levels
+
+def fibonacci_retracements(high: float, low: float) -> Dict[str, float]:
+    """Calculate Fibonacci retracement levels"""
+    diff = high - low
+    return {
+        "0.0": high,
+        "0.236": high - 0.236 * diff,
+        "0.382": high - 0.382 * diff,
+        "0.5": high - 0.5 * diff,
+        "0.618": high - 0.618 * diff,
+        "0.786": high - 0.786 * diff,
+        "1.0": low
+    }
+
+def fibonacci_extensions(high: float, low: float, retracement: float) -> Dict[str, float]:
+    """Calculate Fibonacci extension levels"""
+    diff = high - low
+    retracement_level = high - retracement * diff
+    extension_diff = high - retracement_level
+    
+    return {
+        "1.0": retracement_level,
+        "1.272": retracement_level - 1.272 * extension_diff,
+        "1.618": retracement_level - 1.618 * extension_diff,
+        "2.0": retracement_level - 2.0 * extension_diff,
+        "2.618": retracement_level - 2.618 * extension_diff
+    }
+
+def identify_elliott_waves(df: pd.DataFrame, min_waves: int = 5) -> Dict[str, Any]:
+    """Identify Elliott Wave patterns"""
+    waves = []
+    current_wave = 1
+    wave_start_idx = 0
+    wave_start_price = df.iloc[0]['low']
+    
+    # Find significant swing highs and lows
+    swing_points = []
+    for i in range(1, len(df) - 1):
+        if (df.iloc[i]['high'] > df.iloc[i-1]['high'] and 
+            df.iloc[i]['high'] > df.iloc[i+1]['high']):
+            swing_points.append({"type": "high", "idx": i, "price": df.iloc[i]['high']})
+        elif (df.iloc[i]['low'] < df.iloc[i-1]['low'] and 
+              df.iloc[i]['low'] < df.iloc[i+1]['low']):
+            swing_points.append({"type": "low", "idx": i, "price": df.iloc[i]['low']})
+    
+    # Identify wave patterns
+    if len(swing_points) >= min_waves:
+        for i, point in enumerate(swing_points):
+            if i < len(swing_points) - 1:
+                next_point = swing_points[i + 1]
+                
+                # Wave characteristics
+                wave_length = abs(next_point['price'] - point['price'])
+                wave_duration = next_point['idx'] - point['idx']
+                
+                waves.append({
+                    "wave": current_wave,
+                    "start_idx": point['idx'],
+                    "end_idx": next_point['idx'],
+                    "start_price": point['price'],
+                    "end_price": next_point['price'],
+                    "direction": "up" if next_point['price'] > point['price'] else "down",
+                    "length": wave_length,
+                    "duration": wave_duration
+                })
+                
+                current_wave = (current_wave % 5) + 1
+    
+    # Analyze wave relationships
+    wave_analysis = {
+        "waves": waves,
+        "pattern": "unknown",
+        "confidence": 0.0
+    }
+    
+    if len(waves) >= 5:
+        # Basic Elliott Wave rules
+        wave1_length = waves[0]['length'] if len(waves) > 0 else 0
+        wave3_length = waves[2]['length'] if len(waves) > 2 else 0
+        wave5_length = waves[4]['length'] if len(waves) > 4 else 0
+        
+        # Rule: Wave 3 is often the longest
+        if wave3_length > wave1_length and wave3_length > wave5_length:
+            wave_analysis["confidence"] += 0.3
+        
+        # Rule: Wave 4 should not overlap with Wave 1
+        if len(waves) > 3:
+            wave1_end = waves[0]['end_price']
+            wave4_end = waves[3]['end_price']
+            if (waves[0]['direction'] == 'up' and wave4_end > wave1_end) or \
+               (waves[0]['direction'] == 'down' and wave4_end < wave1_end):
+                wave_analysis["confidence"] += 0.2
+        
+        # Determine pattern
+        if wave_analysis["confidence"] > 0.3:
+            wave_analysis["pattern"] = "impulse"
+        else:
+            wave_analysis["pattern"] = "corrective"
+    
+    return wave_analysis
 
 def ema(series, length):
     """Calculate Exponential Moving Average"""
@@ -233,26 +416,86 @@ def build_snapshot(symbol: str, feature_map: Dict[str, pd.Series]) -> Dict[str, 
         if x is None: return None
         if isinstance(x, float) and math.isnan(x): return None
         return float(x)
+    
     for tf, s in feature_map.items():
-        feat[tf] = {
-            "price": n(s.get("close")),
-            "ema20": n(s.get("ema_20")), "ema50": n(s.get("ema_50")), "ema200": n(s.get("ema_200")),
-            "rsi14": n(s.get("rsi_14")),
-            "macd": {"val": n(s.get("macd")), "signal": n(s.get("macd_signal")), "hist": n(s.get("macd_hist"))},
-            "atr14": n(s.get("atr_14")),
-            "bb": {"mid": n(s.get("bb_mid")), "up": n(s.get("bb_up")), "dn": n(s.get("bb_dn")), "bw": n(s.get("bb_bw"))},
-            "adx14": n(s.get("adx_14")),
-            "di_plus": n(s.get("di_plus")),
-            "di_minus": n(s.get("di_minus")),
-            "obv": n(s.get("obv")),
-            "vwap": n(s.get("vwap")),
-            "structure": {
-                "hh": int(s.get("structure_hh") or 0),
-                "hl": int(s.get("structure_hl") or 0),
-                "lh": int(s.get("structure_lh") or 0),
-                "ll": int(s.get("structure_ll") or 0),
+        # Get the dataframe for this timeframe to calculate advanced indicators
+        df_key = f"{symbol}_{tf}_df"
+        if hasattr(build_snapshot, df_key):
+            df = getattr(build_snapshot, df_key)
+            
+            # Calculate advanced indicators
+            order_blocks = find_order_blocks(df)
+            support_resistance = find_support_resistance_levels(df)
+            
+            # Find recent swing high and low for Fibonacci
+            recent_high = df['high'].tail(50).max()
+            recent_low = df['low'].tail(50).min()
+            fib_retracements = fibonacci_retracements(recent_high, recent_low)
+            
+            # Elliott Wave analysis
+            elliott_waves = identify_elliott_waves(df)
+            
+            feat[tf] = {
+                "price": n(s.get("close")),
+                "ema20": n(s.get("ema_20")), "ema50": n(s.get("ema_50")), "ema200": n(s.get("ema_200")),
+                "rsi14": n(s.get("rsi_14")),
+                "macd": {"val": n(s.get("macd")), "signal": n(s.get("macd_signal")), "hist": n(s.get("macd_hist"))},
+                "atr14": n(s.get("atr_14")),
+                "bb": {"mid": n(s.get("bb_mid")), "up": n(s.get("bb_up")), "dn": n(s.get("bb_dn")), "bw": n(s.get("bb_bw"))},
+                "adx14": n(s.get("adx_14")),
+                "di_plus": n(s.get("di_plus")),
+                "di_minus": n(s.get("di_minus")),
+                "obv": n(s.get("obv")),
+                "vwap": n(s.get("vwap")),
+                "structure": {
+                    "hh": int(s.get("structure_hh") or 0),
+                    "hl": int(s.get("structure_hl") or 0),
+                    "lh": int(s.get("structure_lh") or 0),
+                    "ll": int(s.get("structure_ll") or 0),
+                },
+                # Advanced indicators
+                "order_blocks": {
+                    "bullish": order_blocks["bullish"][-3:] if order_blocks["bullish"] else [],  # Last 3
+                    "bearish": order_blocks["bearish"][-3:] if order_blocks["bearish"] else []   # Last 3
+                },
+                "support_resistance": {
+                    "support": [float(x) for x in support_resistance["support"][:5]],  # Top 5 support levels
+                    "resistance": [float(x) for x in support_resistance["resistance"][:5]]  # Top 5 resistance levels
+                },
+                "fibonacci": {
+                    "retracements": {k: float(v) for k, v in fib_retracements.items()},
+                    "recent_high": float(recent_high),
+                    "recent_low": float(recent_low)
+                },
+                "elliott_waves": {
+                    "pattern": elliott_waves["pattern"],
+                    "confidence": float(elliott_waves["confidence"]),
+                    "wave_count": len(elliott_waves["waves"]),
+                    "current_wave": elliott_waves["waves"][-1] if elliott_waves["waves"] else None
+                }
             }
-        }
+        else:
+            # Fallback to basic indicators if dataframe not available
+            feat[tf] = {
+                "price": n(s.get("close")),
+                "ema20": n(s.get("ema_20")), "ema50": n(s.get("ema_50")), "ema200": n(s.get("ema_200")),
+                "rsi14": n(s.get("rsi_14")),
+                "macd": {"val": n(s.get("macd")), "signal": n(s.get("macd_signal")), "hist": n(s.get("macd_hist"))},
+                "atr14": n(s.get("atr_14")),
+                "bb": {"mid": n(s.get("bb_mid")), "up": n(s.get("bb_up")), "dn": n(s.get("bb_dn")), "bw": n(s.get("bb_bw"))},
+                "adx14": n(s.get("adx_14")),
+                "di_plus": n(s.get("di_plus")),
+                "di_minus": n(s.get("di_minus")),
+                "obv": n(s.get("obv")),
+                "vwap": n(s.get("vwap")),
+                "structure": {
+                    "hh": int(s.get("structure_hh") or 0),
+                    "hl": int(s.get("structure_hl") or 0),
+                    "lh": int(s.get("structure_lh") or 0),
+                    "ll": int(s.get("structure_ll") or 0),
+                }
+            }
+    
     snapshot = {
         "symbol": symbol,
         "now": datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat(),
@@ -319,6 +562,9 @@ def run(
         df_ind = df.copy()
         df_ind.index = pd.to_datetime(df_ind["ts"])
         df_ind = compute_indicators(df_ind)
+
+        # Store dataframe for advanced analysis
+        setattr(build_snapshot, f"{sym}_{tf}_df", df_ind)
 
         # optional upsert to Supabase
         try:
