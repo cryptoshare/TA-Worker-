@@ -410,7 +410,7 @@ def last_closed_row(df: pd.DataFrame) -> pd.Series:
         return df.iloc[-2]
     return df.iloc[-1]
 
-def build_snapshot(symbol: str, feature_map: Dict[str, pd.Series]) -> Dict[str, Any]:
+def build_snapshot(symbol: str, feature_map: Dict[str, pd.Series], dataframes: Dict[str, pd.DataFrame] = None) -> Dict[str, Any]:
     feat: Dict[str, Any] = {}
     def n(x):
         if x is None: return None
@@ -419,10 +419,9 @@ def build_snapshot(symbol: str, feature_map: Dict[str, pd.Series]) -> Dict[str, 
     
     for tf, s in feature_map.items():
         # Get the dataframe for this timeframe to calculate advanced indicators
-        df_key = f"{symbol}_{tf}_df"
-        if hasattr(build_snapshot, df_key):
-            df = getattr(build_snapshot, df_key)
-            
+        df = dataframes.get(tf) if dataframes else None
+        
+        if df is not None and len(df) > 0:
             # Calculate advanced indicators
             order_blocks = find_order_blocks(df)
             support_resistance = find_support_resistance_levels(df)
@@ -555,6 +554,7 @@ def run(
     cat = (category or ENV_CATEGORY).lower()
 
     feature_map: Dict[str, Any] = {}
+    dataframes: Dict[str, pd.DataFrame] = {}
 
     for tf in tf_list:
         df = fetch_ohlcv_bybit(sym, tf, lb, cat)
@@ -564,7 +564,7 @@ def run(
         df_ind = compute_indicators(df_ind)
 
         # Store dataframe for advanced analysis
-        setattr(build_snapshot, f"{sym}_{tf}_df", df_ind)
+        dataframes[tf] = df_ind
 
         # optional upsert to Supabase
         try:
@@ -576,7 +576,7 @@ def run(
         s = df_ind.iloc[-2] if len(df_ind) >= 2 else df_ind.iloc[-1]
         feature_map[tf] = s
 
-    snapshot = build_snapshot(sym, feature_map)
+    snapshot = build_snapshot(sym, feature_map, dataframes)
 
     if WRITE_SNAPSHOT_JSON:
         try:
