@@ -20,7 +20,7 @@ load_dotenv()
 ENV_SYMBOL = os.getenv("SYMBOL", "HYPEUSDT")
 ENV_TFS = [s.strip() for s in os.getenv("TF_LIST", "15m,1h,4h,1d").split(",") if s.strip()]
 ENV_LOOKBACK = int(os.getenv("LOOKBACK", "300"))
-ENV_CATEGORY = os.getenv("BYBIT_CATEGORY", "spot")
+ENV_CATEGORY = os.getenv("BYBIT_CATEGORY", "linear")  # Changed default to linear (futures)
 WRITE_SNAPSHOT_JSON = os.getenv("WRITE_SNAPSHOT_JSON", "true").lower() == "true"
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
@@ -53,6 +53,25 @@ def map_tf_to_bybit(tf: str) -> str:
     if tf.endswith("h"):
         return str(int(tf[:-1]) * 60)
     raise ValueError(f"Unsupported TF: {tf}")
+
+def get_default_category(symbol: str) -> str:
+    """Determine default category based on symbol"""
+    # Common futures symbols (you can expand this list)
+    futures_symbols = [
+        "BTC", "ETH", "SOL", "AVAX", "MATIC", "LINK", "DOT", "ADA", "XRP", "DOGE",
+        "SHIB", "LTC", "BCH", "ETC", "XLM", "VET", "TRX", "EOS", "ATOM", "NEAR",
+        "FTM", "ALGO", "ICP", "FIL", "THETA", "XTZ", "DASH", "ZEC", "BAT", "MANA",
+        "SAND", "ENJ", "CHZ", "HOT", "VET", "HBAR", "ONE", "IOTA", "NEO", "QTUM",
+        "HYPE", "PEPE", "WIF", "BONK", "FLOKI", "SHIB", "DOGE", "BABYDOGE"
+    ]
+    
+    # Check if symbol contains any futures symbol
+    symbol_upper = symbol.upper()
+    for futures_sym in futures_symbols:
+        if futures_sym in symbol_upper:
+            return "linear"  # Use futures for these symbols
+    
+    return "linear"  # Default to futures for all symbols
 
 def ts_ms_to_iso(ts_ms: int) -> str:
     return datetime.datetime.utcfromtimestamp(ts_ms/1000).replace(tzinfo=datetime.timezone.utc).isoformat()
@@ -546,12 +565,17 @@ def run(
     symbol: Optional[str] = Query(default=None),
     tfs: Optional[str] = Query(default=None, description="comma-separated TFs, e.g. 15m,1h,4h,1d"),
     lookback: Optional[int] = Query(default=None),
-    category: Optional[str] = Query(default=None, description="bybit category: spot|linear|inverse")
+    category: Optional[str] = Query(default=None, description="bybit category: linear (futures)|spot|inverse")
 ):
     sym = symbol or ENV_SYMBOL
     tf_list = [s.strip() for s in (tfs or ",".join(ENV_TFS)).split(",") if s.strip()]
     lb = lookback or ENV_LOOKBACK
-    cat = (category or ENV_CATEGORY).lower()
+    
+    # Smart category detection - use futures by default
+    if category:
+        cat = category.lower()
+    else:
+        cat = get_default_category(sym)  # Auto-detect based on symbol
 
     feature_map: Dict[str, Any] = {}
     dataframes: Dict[str, pd.DataFrame] = {}
