@@ -2,7 +2,7 @@
 import os, math, json, uuid, datetime, requests
 from typing import Dict, Any, List, Optional
 import pandas as pd
-import pandas_ta as ta
+import numpy as np
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
@@ -75,42 +75,134 @@ def fetch_ohlcv_bybit(symbol: str, tf: str, limit: int = 300, category: str = "s
                      "close": float(c), "volume": float(v)})
     return pd.DataFrame.from_records(recs)
 
+def ema(series, length):
+    """Calculate Exponential Moving Average"""
+    return series.ewm(span=length, adjust=False).mean()
+
+def rsi(series, length=14):
+    """Calculate Relative Strength Index"""
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=length).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=length).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+def macd(series, fast=12, slow=26, signal=9):
+    """Calculate MACD"""
+    ema_fast = ema(series, fast)
+    ema_slow = ema(series, slow)
+    macd_line = ema_fast - ema_slow
+    signal_line = ema(macd_line, signal)
+    histogram = macd_line - signal_line
+    return macd_line, signal_line, histogram
+
+def atr(high, low, close, length=14):
+    """Calculate Average True Range"""
+    tr1 = high - low
+    tr2 = abs(high - close.shift())
+    tr3 = abs(low - close.shift())
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    return tr.rolling(window=length).mean()
+
+def bollinger_bands(series, length=20, std_dev=2):
+    """Calculate Bollinger Bands"""
+    sma = series.rolling(window=length).mean()
+    std = series.rolling(window=length).std()
+    upper_band = sma + (std * std_dev)
+    lower_band = sma - (std * std_dev)
+    return sma, upper_band, lower_band
+
+def adx(high, low, close, length=14):
+    """Calculate Average Directional Index"""
+    # True Range
+    tr1 = high - low
+    tr2 = abs(high - close.shift())
+    tr3 = abs(low - close.shift())
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    
+    # Directional Movement
+    dm_plus = high - high.shift()
+    dm_minus = low.shift() - low
+    dm_plus = dm_plus.where((dm_plus > dm_minus) & (dm_plus > 0), 0)
+    dm_minus = dm_minus.where((dm_minus > dm_plus) & (dm_minus > 0), 0)
+    
+    # Smoothed values
+    tr_smooth = tr.rolling(window=length).mean()
+    dm_plus_smooth = dm_plus.rolling(window=length).mean()
+    dm_minus_smooth = dm_minus.rolling(window=length).mean()
+    
+    # DI+ and DI-
+    di_plus = 100 * (dm_plus_smooth / tr_smooth)
+    di_minus = 100 * (dm_minus_smooth / tr_smooth)
+    
+    # DX and ADX
+    dx = 100 * abs(di_plus - di_minus) / (di_plus + di_minus)
+    adx = dx.rolling(window=length).mean()
+    
+    return adx, di_plus, di_minus
+
+def obv(close, volume):
+    """Calculate On Balance Volume"""
+    obv = pd.Series(index=close.index, dtype=float)
+    obv.iloc[0] = volume.iloc[0]
+    
+    for i in range(1, len(close)):
+        if close.iloc[i] > close.iloc[i-1]:
+            obv.iloc[i] = obv.iloc[i-1] + volume.iloc[i]
+        elif close.iloc[i] < close.iloc[i-1]:
+            obv.iloc[i] = obv.iloc[i-1] - volume.iloc[i]
+        else:
+            obv.iloc[i] = obv.iloc[i-1]
+    
+    return obv
+
+def vwap(high, low, close, volume):
+    """Calculate Volume Weighted Average Price"""
+    typical_price = (high + low + close) / 3
+    return (typical_price * volume).cumsum() / volume.cumsum()
+
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
+    
     # EMAs
-    df["ema_20"] = ta.ema(df["close"], length=20)
-    df["ema_50"] = ta.ema(df["close"], length=50)
-    df["ema_200"] = ta.ema(df["close"], length=200)
+    df["ema_20"] = ema(df["close"], 20)
+    df["ema_50"] = ema(df["close"], 50)
+    df["ema_200"] = ema(df["close"], 200)
+    
     # RSI
-    df["rsi_14"] = ta.rsi(df["close"], length=14)
+    df["rsi_14"] = rsi(df["close"], 14)
+    
     # MACD
-    macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
-    if macd is not None and not macd.empty:
-        df["macd"] = macd["MACD_12_26_9"]
-        df["macd_signal"] = macd["MACDs_12_26_9"]
-        df["macd_hist"] = macd["MACDh_12_26_9"]
+    macd_line, signal_line, histogram = macd(df["close"], 12, 26, 9)
+    df["macd"] = macd_line
+    df["macd_signal"] = signal_line
+    df["macd_hist"] = histogram
+    
     # ATR
-    df["atr_14"] = ta.atr(df["high"], df["low"], df["close"], length=14)
-    # Bollinger
-    bb = ta.bbands(df["close"], length=20, std=2.0)
-    if bb is not None and not bb.empty:
-        df["bb_mid"] = bb["BBM_20_2.0"]
-        df["bb_up"] = bb["BBU_20_2.0"]
-        df["bb_dn"] = bb["BBL_20_2.0"]
-        df["bb_bw"] = (df["bb_up"] - df["bb_dn"]) / df["bb_mid"]
+    df["atr_14"] = atr(df["high"], df["low"], df["close"], 14)
+    
+    # Bollinger Bands
+    bb_mid, bb_up, bb_dn = bollinger_bands(df["close"], 20, 2.0)
+    df["bb_mid"] = bb_mid
+    df["bb_up"] = bb_up
+    df["bb_dn"] = bb_dn
+    df["bb_bw"] = (df["bb_up"] - df["bb_dn"]) / df["bb_mid"]
+    
     # ADX (+DI/-DI)
-    adx = ta.adx(df["high"], df["low"], df["close"], length=14)
-    if adx is not None and not adx.empty:
-        df["adx_14"] = adx["ADX_14"]
-        df["di_plus"] = adx["DMP_14"]
-        df["di_minus"] = adx["DMN_14"]
+    adx_val, di_plus, di_minus = adx(df["high"], df["low"], df["close"], 14)
+    df["adx_14"] = adx_val
+    df["di_plus"] = di_plus
+    df["di_minus"] = di_minus
+    
     # OBV
-    df["obv"] = ta.obv(df["close"], df["volume"])
-    # VWAP (may be rolling if multi-day)
+    df["obv"] = obv(df["close"], df["volume"])
+    
+    # VWAP
     try:
-        df["vwap"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"])
+        df["vwap"] = vwap(df["high"], df["low"], df["close"], df["volume"])
     except Exception:
         df["vwap"] = None
+    
     # Simple structure flags based on last two closed candles
     df["structure_hh"] = 0
     df["structure_hl"] = 0
@@ -127,6 +219,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
             df.loc[df.index[-2], "structure_hl"] = 1
         else:
             df.loc[df.index[-2], "structure_ll"] = 1
+    
     return df
 
 def last_closed_row(df: pd.DataFrame) -> pd.Series:
