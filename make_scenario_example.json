@@ -1,0 +1,151 @@
+{
+  "scenario_name": "TA Worker + ChatGPT Trading Bot",
+  "description": "Automated trading bot using TA Worker data and ChatGPT analysis",
+  "modules": [
+    {
+      "id": 1,
+      "type": "schedule",
+      "name": "Trigger Every 15 Minutes",
+      "config": {
+        "frequency": "every_15_minutes",
+        "timezone": "UTC"
+      }
+    },
+    {
+      "id": 2,
+      "type": "http",
+      "name": "Get TA Worker Data",
+      "config": {
+        "method": "GET",
+        "url": "https://ta-worker-ta-worker-ai.up.railway.app/v1/run",
+        "parameters": {
+          "symbol": "HYPEUSDT",
+          "tfs": "15m,1h,4h,1d",
+          "lookback": "300",
+          "category": "linear"
+        },
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "timeout": 30000
+      }
+    },
+    {
+      "id": 3,
+      "type": "router",
+      "name": "Check HTTP Response",
+      "config": {
+        "routes": [
+          {
+            "name": "Success",
+            "condition": "{{2.statusCode}} == 200"
+          },
+          {
+            "name": "Error",
+            "condition": "{{2.statusCode}} != 200"
+          }
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "type": "chatgpt",
+      "name": "Analyze with ChatGPT",
+      "config": {
+        "model": "gpt-4",
+        "temperature": 0.1,
+        "max_tokens": 2000,
+        "system_message": "You are a professional cryptocurrency trading analyst. Analyze the technical data provided and give clear trading recommendations in JSON format.",
+        "user_message": "Analyze this technical data for HYPEUSDT and provide: 1. Market sentiment (Bullish/Bearish/Neutral), 2. Key support/resistance levels, 3. Entry strategy with stop loss and take profit, 4. Risk level (Low/Medium/High), 5. Confidence score (1-10), 6. Brief reasoning. Technical Data: {{2.body}}"
+      }
+    },
+    {
+      "id": 5,
+      "type": "router",
+      "name": "Check Confidence Level",
+      "config": {
+        "routes": [
+          {
+            "name": "High Confidence",
+            "condition": "{{4.confidence_score}} > 7"
+          },
+          {
+            "name": "Medium Confidence",
+            "condition": "{{4.confidence_score}} >= 5 && {{4.confidence_score}} <= 7"
+          },
+          {
+            "name": "Low Confidence",
+            "condition": "{{4.confidence_score}} < 5"
+          }
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "type": "telegram",
+      "name": "Send High Confidence Alert",
+      "config": {
+        "chat_id": "YOUR_CHAT_ID",
+        "message": "🚨 HIGH CONFIDENCE TRADING SIGNAL: HYPEUSDT\n\n📊 Analysis:\n- Sentiment: {{4.sentiment}}\n- Confidence: {{4.confidence_score}}/10\n- Risk Level: {{4.risk_level}}\n\n💰 Entry Strategy:\n- Entry: ${{4.entry_price}}\n- Stop Loss: ${{4.stop_loss}}\n- Take Profit 1: ${{4.take_profit_1}}\n- Take Profit 2: ${{4.take_profit_2}}\n\n📈 Key Levels:\n- Support: ${{4.support_level}}\n- Resistance: ${{4.resistance_level}}\n\n⚠️ Risk: {{4.risk_level}}\n\n💡 Reasoning: {{4.reasoning}}"
+      }
+    },
+    {
+      "id": 7,
+      "type": "telegram",
+      "name": "Send Medium Confidence Alert",
+      "config": {
+        "chat_id": "YOUR_CHAT_ID",
+        "message": "⚠️ MEDIUM CONFIDENCE SIGNAL: HYPEUSDT\n\n📊 Analysis:\n- Sentiment: {{4.sentiment}}\n- Confidence: {{4.confidence_score}}/10\n- Risk Level: {{4.risk_level}}\n\n💰 Entry Strategy:\n- Entry: ${{4.entry_price}}\n- Stop Loss: ${{4.stop_loss}}\n- Take Profit: ${{4.take_profit_1}}\n\n📈 Key Levels:\n- Support: ${{4.support_level}}\n- Resistance: ${{4.resistance_level}}\n\n💡 Reasoning: {{4.reasoning}}\n\n⚠️ Monitor closely - lower confidence signal"
+      }
+    },
+    {
+      "id": 8,
+      "type": "telegram",
+      "name": "Send Error Notification",
+      "config": {
+        "chat_id": "YOUR_CHAT_ID",
+        "message": "❌ ERROR: TA Worker API failed\n\nStatus Code: {{2.statusCode}}\nError: {{2.error}}\n\nPlease check the TA Worker service."
+      }
+    },
+    {
+      "id": 9,
+      "type": "google_sheets",
+      "name": "Log Trading Signal",
+      "config": {
+        "spreadsheet_id": "YOUR_SPREADSHEET_ID",
+        "sheet_name": "Trading Signals",
+        "data": {
+          "timestamp": "{{1.timestamp}}",
+          "symbol": "HYPEUSDT",
+          "sentiment": "{{4.sentiment}}",
+          "confidence": "{{4.confidence_score}}",
+          "entry_price": "{{4.entry_price}}",
+          "stop_loss": "{{4.stop_loss}}",
+          "take_profit_1": "{{4.take_profit_1}}",
+          "take_profit_2": "{{4.take_profit_2}}",
+          "risk_level": "{{4.risk_level}}",
+          "support": "{{4.support_level}}",
+          "resistance": "{{4.resistance_level}}",
+          "reasoning": "{{4.reasoning}}"
+        }
+      }
+    }
+  ],
+  "connections": [
+    {"from": 1, "to": 2},
+    {"from": 2, "to": 3},
+    {"from": 3, "to": 4, "route": "Success"},
+    {"from": 3, "to": 8, "route": "Error"},
+    {"from": 4, "to": 5},
+    {"from": 5, "to": 6, "route": "High Confidence"},
+    {"from": 5, "to": 7, "route": "Medium Confidence"},
+    {"from": 6, "to": 9},
+    {"from": 7, "to": 9}
+  ],
+  "settings": {
+    "error_handling": "continue_on_error",
+    "retry_on_failure": true,
+    "max_retries": 3,
+    "retry_delay": 5000
+  }
+}
