@@ -16,7 +16,7 @@
 │  │                                                     │    │
 │  │ Parameters:                                         │    │
 │  │ ├─ symbol: HYPEUSDT                                │    │
-│  │ ├─ tfs: 15m,1h,4h,1d                              │    │
+│  │ ├─ tfs: 5m,15m,1h,1d                              │    │
 │  │ ├─ lookback: 300                                  │    │
 │  │ └─ category: linear                               │    │
 │  └─────────────────────────────────────────────────────┘    │
@@ -29,6 +29,15 @@
 │  │   "symbol": "HYPEUSDT",                           │    │
 │  │   "now": "2025-08-20T16:35:15.792776+00:00",      │    │
 │  │   "features": {                                    │    │
+│  │     "5m": {                                        │    │
+│  │       "price": 42.444,                            │    │
+│  │       "rsi14": 53.541,                            │    │
+│  │       "macd": {"val": 0.129, "signal": 0.034},    │    │
+│  │       "support_resistance": {                      │    │
+│  │         "support": [47.39, 46.404, 43.803],       │    │
+│  │         "resistance": [42.869, 44.362, 47.126]    │    │
+│  │       }                                            │    │
+│  │     },                                             │    │
 │  │     "15m": {                                       │    │
 │  │       "price": 42.444,                            │    │
 │  │       "rsi14": 53.541,                            │    │
@@ -81,7 +90,7 @@
 │  Parameters:                                               │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │ Name: symbol    Value: HYPEUSDT                    │    │
-│  │ Name: tfs       Value: 15m,1h,4h,1d               │    │
+│  │ Name: tfs       Value: 5m,15m,1h,1d               │    │
 │  │ Name: lookback  Value: 300                         │    │
 │  │ Name: category  Value: linear                      │    │
 │  └─────────────────────────────────────────────────────┘    │
@@ -135,14 +144,29 @@
 │  Timestamp: {{1.now}}                                      │
 │  → Returns: "2025-08-20T16:35:15.792776+00:00"             │
 │                                                             │
+│  5m Price: {{1.features.5m.price}}                         │
+│  → Returns: 42.444                                         │
+│                                                             │
 │  15m Price: {{1.features.15m.price}}                       │
 │  → Returns: 42.444                                         │
+│                                                             │
+│  1h Price: {{1.features.1h.price}}                         │
+│  → Returns: 42.444                                         │
+│                                                             │
+│  1d Price: {{1.features.1d.price}}                         │
+│  → Returns: 42.444                                         │
+│                                                             │
+│  5m RSI: {{1.features.5m.rsi14}}                           │
+│  → Returns: 53.541                                         │
 │                                                             │
 │  15m RSI: {{1.features.15m.rsi14}}                         │
 │  → Returns: 53.541                                         │
 │                                                             │
-│  15m MACD: {{1.features.15m.macd.val}}                     │
-│  → Returns: 0.129                                          │
+│  1h RSI: {{1.features.1h.rsi14}}                           │
+│  → Returns: 53.541                                         │
+│                                                             │
+│  1d RSI: {{1.features.1d.rsi14}}                           │
+│  → Returns: 53.541                                         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -245,9 +269,11 @@
 **TA Worker URL**: `https://ta-worker-ta-worker-ai.up.railway.app/v1/run`
 
 **Required Parameters**:
-- `symbol`: HYPEUSDT
-- `tfs`: 15m,1h,4h,1d
+- `symbol`: HYPEUSDT, BTCUSDT, ETHUSDT, SOLUSDT
+- `tfs`: 5m,15m,1h,1d
 - `lookback`: 300
 - `category`: linear
 
-**Data Access**: `{{1.features.15m.price}}`
+**Available Timeframes**: 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d, 1w, 1M
+
+**Data Access**: `{{1.features.5m.price}}`, `{{1.features.15m.price}}`, `{{1.features.1h.price}}`, `{{1.features.1d.price}}`
