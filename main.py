@@ -1,5 +1,5 @@
 
-import os, math, json, uuid, datetime, requests
+import os, math, json, uuid, datetime, requests, time, hmac, hashlib
 from typing import Dict, Any, List, Optional, Tuple
 import pandas as pd
 import numpy as np
@@ -22,6 +22,11 @@ ENV_TFS = [s.strip() for s in os.getenv("TF_LIST", "15m,1h,4h,1d").split(",") if
 ENV_LOOKBACK = int(os.getenv("LOOKBACK", "300"))
 ENV_CATEGORY = os.getenv("BYBIT_CATEGORY", "linear")  # Changed default to linear (futures)
 WRITE_SNAPSHOT_JSON = os.getenv("WRITE_SNAPSHOT_JSON", "true").lower() == "true"
+
+# Bybit API credentials
+BYBIT_API_KEY = os.getenv("BYBIT_API_KEY", "")
+BYBIT_SECRET_KEY = os.getenv("BYBIT_SECRET_KEY", "")
+BYBIT_TESTNET = os.getenv("BYBIT_TESTNET", "false").lower() == "true"
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -93,6 +98,189 @@ def fetch_ohlcv_bybit(symbol: str, tf: str, limit: int = 300, category: str = "s
                      "open": float(o), "high": float(h), "low": float(l),
                      "close": float(c), "volume": float(v)})
     return pd.DataFrame.from_records(recs)
+
+# ---------- Bybit API Authentication and Position Functions ----------
+
+def get_bybit_base_url() -> str:
+    """Get Bybit API base URL based on testnet setting"""
+    if BYBIT_TESTNET:
+        return "https://api-testnet.bybit.com"
+    return "https://api.bybit.com"
+
+def sign_bybit_request(api_key: str, secret_key: str, timestamp: str, recv_window: str, params: str) -> str:
+    """Sign Bybit API request"""
+    param_str = f"{timestamp}{api_key}{recv_window}{params}"
+    signature = hmac.new(
+        secret_key.encode('utf-8'),
+        param_str.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
+    return signature
+
+def get_bybit_positions(symbol: str = None, category: str = "linear") -> Dict[str, Any]:
+    """Get current open positions from Bybit"""
+    
+    if not BYBIT_API_KEY or not BYBIT_SECRET_KEY:
+        return {
+            "error": "Bybit API credentials not configured",
+            "message": "Please set BYBIT_API_KEY and BYBIT_SECRET_KEY environment variables"
+        }
+    
+    try:
+        base_url = get_bybit_base_url()
+        endpoint = "/v5/position/list"
+        
+        # Prepare parameters
+        timestamp = str(int(time.time() * 1000))
+        recv_window = "5000"
+        
+        params = {
+            "api_key": BYBIT_API_KEY,
+            "category": category,
+            "recv_window": recv_window,
+            "timestamp": timestamp
+        }
+        
+        # Add symbol filter if provided
+        if symbol:
+            params["symbol"] = symbol
+        
+        # Convert params to query string
+        param_str = "&".join([f"{k}={v}" for k, v in sorted(params.items()) if k != "api_key"])
+        
+        # Sign the request
+        signature = sign_bybit_request(BYBIT_API_KEY, BYBIT_SECRET_KEY, timestamp, recv_window, param_str)
+        params["sign"] = signature
+        
+        # Make the request
+        url = f"{base_url}{endpoint}"
+        headers = {"Content-Type": "application/json"}
+        
+        response = requests.get(url, params=params, headers=headers, timeout=30)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if data.get("retCode") != 0:
+            return {
+                "error": "Bybit API error",
+                "retCode": data.get("retCode"),
+                "retMsg": data.get("retMsg"),
+                "data": data
+            }
+        
+        # Process positions
+        positions = data.get("result", {}).get("list", [])
+        open_positions = []
+        
+        for pos in positions:
+            # Only include positions with size > 0 (open positions)
+            if float(pos.get("size", "0")) > 0:
+                open_positions.append({
+                    "symbol": pos.get("symbol"),
+                    "side": pos.get("side"),  # Buy/Sell
+                    "size": float(pos.get("size", "0")),
+                    "entry_price": float(pos.get("avgPrice", "0")),
+                    "mark_price": float(pos.get("markPrice", "0")),
+                    "unrealized_pnl": float(pos.get("unrealisedPnl", "0")),
+                    "realized_pnl": float(pos.get("realisedPnl", "0")),
+                    "leverage": float(pos.get("leverage", "0")),
+                    "margin_mode": pos.get("marginMode"),  # REGULAR_MARGIN/ISOLATED_MARGIN
+                    "position_mode": pos.get("positionMode"),  # 0: Merged Single, 3: Both Sides
+                    "stop_loss": float(pos.get("stopLoss", "0")),
+                    "take_profit": float(pos.get("takeProfit", "0")),
+                    "position_idx": pos.get("positionIdx"),  # 0: One-Way Mode, 1: Buy Side, 2: Sell Side
+                    "category": pos.get("category"),
+                    "updated_time": pos.get("updatedTime")
+                })
+        
+        return {
+            "success": True,
+            "total_open_positions": len(open_positions),
+            "positions": open_positions,
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "category": category,
+            "symbol_filter": symbol if symbol else "all"
+        }
+        
+    except requests.exceptions.RequestException as e:
+        return {
+            "error": "Network error",
+            "message": str(e)
+        }
+    except Exception as e:
+        return {
+            "error": "Unexpected error",
+            "message": str(e)
+        }
+
+def get_bybit_account_info() -> Dict[str, Any]:
+    """Get Bybit account information"""
+    
+    if not BYBIT_API_KEY or not BYBIT_SECRET_KEY:
+        return {
+            "error": "Bybit API credentials not configured",
+            "message": "Please set BYBIT_API_KEY and BYBIT_SECRET_KEY environment variables"
+        }
+    
+    try:
+        base_url = get_bybit_base_url()
+        endpoint = "/v5/account/wallet-balance"
+        
+        # Prepare parameters
+        timestamp = str(int(time.time() * 1000))
+        recv_window = "5000"
+        
+        params = {
+            "api_key": BYBIT_API_KEY,
+            "accountType": "UNIFIED",
+            "recv_window": recv_window,
+            "timestamp": timestamp
+        }
+        
+        # Convert params to query string
+        param_str = "&".join([f"{k}={v}" for k, v in sorted(params.items()) if k != "api_key"])
+        
+        # Sign the request
+        signature = sign_bybit_request(BYBIT_API_KEY, BYBIT_SECRET_KEY, timestamp, recv_window, param_str)
+        params["sign"] = signature
+        
+        # Make the request
+        url = f"{base_url}{endpoint}"
+        headers = {"Content-Type": "application/json"}
+        
+        response = requests.get(url, params=params, headers=headers, timeout=30)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if data.get("retCode") != 0:
+            return {
+                "error": "Bybit API error",
+                "retCode": data.get("retCode"),
+                "retMsg": data.get("retMsg"),
+                "data": data
+            }
+        
+        # Process account info
+        account_info = data.get("result", {}).get("list", [])
+        
+        return {
+            "success": True,
+            "account_info": account_info,
+            "timestamp": datetime.datetime.utcnow().isoformat()
+        }
+        
+    except requests.exceptions.RequestException as e:
+        return {
+            "error": "Network error",
+            "message": str(e)
+        }
+    except Exception as e:
+        return {
+            "error": "Unexpected error",
+            "message": str(e)
+        }
 
 # ---------- Advanced Technical Analysis Functions ----------
 
@@ -610,3 +798,50 @@ def run(
             pass
 
     return JSONResponse(snapshot)
+
+@app.get("/v1/positions")
+def get_positions(
+    symbol: Optional[str] = Query(default=None, description="Filter by specific symbol (e.g., HYPEUSDT)"),
+    category: Optional[str] = Query(default="linear", description="Bybit category: linear (futures)|spot|inverse")
+):
+    """
+    Get current open positions from Bybit
+    
+    Parameters:
+    - symbol: Optional symbol filter (e.g., HYPEUSDT, BTCUSDT)
+    - category: Bybit category (default: linear for futures)
+    
+    Returns:
+    - JSON with open positions information
+    """
+    result = get_bybit_positions(symbol, category)
+    return JSONResponse(result)
+
+@app.get("/v1/account")
+def get_account():
+    """
+    Get Bybit account information and wallet balance
+    
+    Returns:
+    - JSON with account information
+    """
+    result = get_bybit_account_info()
+    return JSONResponse(result)
+
+@app.get("/v1/positions/{symbol}")
+def get_position_by_symbol(
+    symbol: str,
+    category: Optional[str] = Query(default="linear", description="Bybit category: linear (futures)|spot|inverse")
+):
+    """
+    Get current open positions for a specific symbol
+    
+    Parameters:
+    - symbol: Symbol to check (e.g., HYPEUSDT, BTCUSDT)
+    - category: Bybit category (default: linear for futures)
+    
+    Returns:
+    - JSON with open positions for the specified symbol
+    """
+    result = get_bybit_positions(symbol, category)
+    return JSONResponse(result)

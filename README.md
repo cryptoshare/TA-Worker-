@@ -15,13 +15,30 @@ snapshot JSON your Make.com scenario can pass to ChatGPT's Decision Engine.
 
 ## Endpoints
 
+### Technical Analysis
 - `GET /v1/healthz` — simple health check
 - `GET /v1/run` — builds and returns the snapshot
   - Query params (optional): `symbol`, `tfs` (comma list), `lookback`, `category`
 
 Example:
 ```
-GET /v1/run?symbol=HYPEUSDT&tfs=15m,1h,4h,1d&lookback=300&category=linear
+GET /v1/run?symbol=HYPEUSDT&tfs=5m,15m,1h,1d&lookback=300&category=linear
+```
+
+### Bybit Position Management
+- `GET /v1/positions` — get all open positions
+  - Query params (optional): `symbol`, `category`
+- `GET /v1/positions/{symbol}` — get positions for specific symbol
+  - Path param: `symbol` (e.g., HYPEUSDT)
+  - Query params (optional): `category`
+- `GET /v1/account` — get account information and wallet balance
+
+Examples:
+```
+GET /v1/positions?category=linear
+GET /v1/positions?symbol=HYPEUSDT&category=linear
+GET /v1/positions/HYPEUSDT?category=linear
+GET /v1/account
 ```
 
 ## Deploy on Railway
@@ -33,11 +50,15 @@ uvicorn main:app --host 0.0.0.0 --port $PORT
 ```
 3. Variables (Settings → Variables):
    - `SYMBOL` (default pair)
-   - `TF_LIST` (e.g., `15m,1h,4h,1d`)
+   - `TF_LIST` (e.g., `5m,15m,1h,1d`)
    - `LOOKBACK` (e.g., `300`)
    - `BYBIT_CATEGORY` (`linear` for futures, `spot` for spot trading)
    - Optional: `WRITE_SNAPSHOT_JSON=true`
    - Optional: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (if you want to upsert data)
+   - **Bybit API Credentials** (for position checking):
+     - `BYBIT_API_KEY` (your Bybit API key)
+     - `BYBIT_SECRET_KEY` (your Bybit secret key)
+     - `BYBIT_TESTNET` (`true` for testnet, `false` for mainnet)
 
 ## Make.com usage
 
