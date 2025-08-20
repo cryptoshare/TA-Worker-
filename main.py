@@ -118,6 +118,142 @@ def sign_bybit_request(api_key: str, secret_key: str, timestamp: str, recv_windo
     ).hexdigest()
     return signature
 
+def get_bybit_positions_with_fallback(symbol: str = None, category: str = "linear") -> Dict[str, Any]:
+    """Get current open positions from Bybit with fallback to different account types"""
+    
+    if not BYBIT_API_KEY or not BYBIT_SECRET_KEY:
+        return {
+            "error": "Bybit API credentials not configured",
+            "message": "Please set BYBIT_API_KEY and BYBIT_SECRET_KEY environment variables"
+        }
+    
+    # Try different account types
+    account_types = ["UNIFIED", "CONTRACT", "SPOT"]
+    
+    for account_type in account_types:
+        try:
+            result = get_bybit_positions_for_account_type(symbol, category, account_type)
+            if result.get("success") or "Network error" not in result.get("error", ""):
+                return result
+        except Exception:
+            continue
+    
+    # If all fail, return a generic error
+    return {
+        "error": "All Bybit API attempts failed",
+        "message": "Tried UNIFIED, CONTRACT, and SPOT account types but none worked",
+        "has_position": False
+    }
+
+def get_bybit_positions_for_account_type(symbol: str = None, category: str = "linear", account_type: str = "UNIFIED") -> Dict[str, Any]:
+    """Get current open positions from Bybit for a specific account type"""
+    
+    try:
+        base_url = get_bybit_base_url()
+        endpoint = "/v5/position/list"
+        
+        # Prepare parameters
+        timestamp = str(int(time.time() * 1000))
+        recv_window = "5000"
+        
+        params = {
+            "api_key": BYBIT_API_KEY,
+            "category": category,
+            "recv_window": recv_window,
+            "timestamp": timestamp
+        }
+        
+        # Add account type if specified
+        if account_type:
+            params["accountType"] = account_type
+        
+        # Add symbol filter if provided
+        if symbol:
+            params["symbol"] = symbol
+        
+        # Convert params to query string for signature (excluding api_key)
+        param_str = "&".join([f"{k}={v}" for k, v in sorted(params.items()) if k != "api_key"])
+        
+        # Sign the request
+        signature = sign_bybit_request(BYBIT_API_KEY, BYBIT_SECRET_KEY, timestamp, recv_window, param_str)
+        params["sign"] = signature
+        
+        # Make the request using POST for Bybit API v5
+        url = f"{base_url}{endpoint}"
+        headers = {"Content-Type": "application/json"}
+        
+        response = requests.post(url, json=params, headers=headers, timeout=30)
+        
+        # Handle 404 and other errors gracefully
+        if response.status_code == 404:
+            return {
+                "error": f"Bybit API endpoint not found for account type {account_type}",
+                "message": "The position endpoint may not be available for your account type or API key permissions",
+                "status_code": 404,
+                "account_type": account_type
+            }
+        
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if data.get("retCode") != 0:
+            return {
+                "error": "Bybit API error",
+                "retCode": data.get("retCode"),
+                "retMsg": data.get("retMsg"),
+                "data": data,
+                "account_type": account_type
+            }
+        
+        # Process positions
+        positions = data.get("result", {}).get("list", [])
+        open_positions = []
+        
+        for pos in positions:
+            # Only include positions with size > 0 (open positions)
+            if float(pos.get("size", "0")) > 0:
+                open_positions.append({
+                    "symbol": pos.get("symbol"),
+                    "side": pos.get("side"),  # Buy/Sell
+                    "size": float(pos.get("size", "0")),
+                    "entry_price": float(pos.get("avgPrice", "0")),
+                    "mark_price": float(pos.get("markPrice", "0")),
+                    "unrealized_pnl": float(pos.get("unrealisedPnl", "0")),
+                    "realized_pnl": float(pos.get("realisedPnl", "0")),
+                    "leverage": float(pos.get("leverage", "0")),
+                    "margin_mode": pos.get("marginMode"),  # REGULAR_MARGIN/ISOLATED_MARGIN
+                    "position_mode": pos.get("positionMode"),  # 0: Merged Single, 3: Both Sides
+                    "stop_loss": float(pos.get("stopLoss", "0")),
+                    "take_profit": float(pos.get("takeProfit", "0")),
+                    "position_idx": pos.get("positionIdx"),  # 0: One-Way Mode, 1: Buy Side, 2: Sell Side
+                    "category": pos.get("category"),
+                    "updated_time": pos.get("updatedTime")
+                })
+        
+        return {
+            "success": True,
+            "total_open_positions": len(open_positions),
+            "positions": open_positions,
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "category": category,
+            "symbol_filter": symbol if symbol else "all",
+            "account_type": account_type
+        }
+        
+    except requests.exceptions.RequestException as e:
+        return {
+            "error": "Network error",
+            "message": str(e),
+            "account_type": account_type
+        }
+    except Exception as e:
+        return {
+            "error": "Unexpected error",
+            "message": str(e),
+            "account_type": account_type
+        }
+
 def get_bybit_positions(symbol: str = None, category: str = "linear") -> Dict[str, Any]:
     """Get current open positions from Bybit"""
     
@@ -158,6 +294,15 @@ def get_bybit_positions(symbol: str = None, category: str = "linear") -> Dict[st
         headers = {"Content-Type": "application/json"}
         
         response = requests.post(url, json=params, headers=headers, timeout=30)
+        
+        # Handle 404 and other errors gracefully
+        if response.status_code == 404:
+            return {
+                "error": "Bybit API endpoint not found",
+                "message": "The position endpoint may not be available for your account type or API key permissions",
+                "status_code": 404
+            }
+        
         response.raise_for_status()
         
         data = response.json()
@@ -251,6 +396,15 @@ def get_bybit_account_info() -> Dict[str, Any]:
         headers = {"Content-Type": "application/json"}
         
         response = requests.post(url, json=params, headers=headers, timeout=30)
+        
+        # Handle 404 and other errors gracefully
+        if response.status_code == 404:
+            return {
+                "error": "Bybit API endpoint not found",
+                "message": "The account endpoint may not be available for your account type or API key permissions",
+                "status_code": 404
+            }
+        
         response.raise_for_status()
         
         data = response.json()
@@ -712,7 +866,7 @@ def build_snapshot(symbol: str, feature_map: Dict[str, pd.Series], dataframes: D
     # Add position data if requested and API credentials are available
     if include_position and BYBIT_API_KEY and BYBIT_SECRET_KEY:
         try:
-            position_data = get_bybit_positions(symbol, "linear")
+            position_data = get_bybit_positions_with_fallback(symbol, "linear")
             if position_data.get("success"):
                 snapshot["position"] = {
                     "has_position": position_data["total_open_positions"] > 0,
