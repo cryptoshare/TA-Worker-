@@ -109,6 +109,7 @@ def get_bybit_base_url() -> str:
 
 def sign_bybit_request(api_key: str, secret_key: str, timestamp: str, recv_window: str, params: str) -> str:
     """Sign Bybit API request"""
+    # Bybit signature format: timestamp + api_key + recv_window + params
     param_str = f"{timestamp}{api_key}{recv_window}{params}"
     signature = hmac.new(
         secret_key.encode('utf-8'),
@@ -145,18 +146,18 @@ def get_bybit_positions(symbol: str = None, category: str = "linear") -> Dict[st
         if symbol:
             params["symbol"] = symbol
         
-        # Convert params to query string
+        # Convert params to query string for signature (excluding api_key)
         param_str = "&".join([f"{k}={v}" for k, v in sorted(params.items()) if k != "api_key"])
         
         # Sign the request
         signature = sign_bybit_request(BYBIT_API_KEY, BYBIT_SECRET_KEY, timestamp, recv_window, param_str)
         params["sign"] = signature
         
-        # Make the request
+        # Make the request using POST for Bybit API v5
         url = f"{base_url}{endpoint}"
         headers = {"Content-Type": "application/json"}
         
-        response = requests.get(url, params=params, headers=headers, timeout=30)
+        response = requests.post(url, json=params, headers=headers, timeout=30)
         response.raise_for_status()
         
         data = response.json()
@@ -238,18 +239,18 @@ def get_bybit_account_info() -> Dict[str, Any]:
             "timestamp": timestamp
         }
         
-        # Convert params to query string
+        # Convert params to query string for signature (excluding api_key)
         param_str = "&".join([f"{k}={v}" for k, v in sorted(params.items()) if k != "api_key"])
         
         # Sign the request
         signature = sign_bybit_request(BYBIT_API_KEY, BYBIT_SECRET_KEY, timestamp, recv_window, param_str)
         params["sign"] = signature
         
-        # Make the request
+        # Make the request using POST for Bybit API v5
         url = f"{base_url}{endpoint}"
         headers = {"Content-Type": "application/json"}
         
-        response = requests.get(url, params=params, headers=headers, timeout=30)
+        response = requests.post(url, json=params, headers=headers, timeout=30)
         response.raise_for_status()
         
         data = response.json()
