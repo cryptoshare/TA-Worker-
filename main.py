@@ -617,7 +617,7 @@ def last_closed_row(df: pd.DataFrame) -> pd.Series:
         return df.iloc[-2]
     return df.iloc[-1]
 
-def build_snapshot(symbol: str, feature_map: Dict[str, pd.Series], dataframes: Dict[str, pd.DataFrame] = None) -> Dict[str, Any]:
+def build_snapshot(symbol: str, feature_map: Dict[str, pd.Series], dataframes: Dict[str, pd.DataFrame] = None, include_position: bool = True) -> Dict[str, Any]:
     feat: Dict[str, Any] = {}
     def n(x):
         if x is None: return None
@@ -707,6 +707,36 @@ def build_snapshot(symbol: str, feature_map: Dict[str, pd.Series], dataframes: D
         "now": datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat(),
         "features": feat
     }
+    
+    # Add position data if requested and API credentials are available
+    if include_position and BYBIT_API_KEY and BYBIT_SECRET_KEY:
+        try:
+            position_data = get_bybit_positions(symbol, "linear")
+            if position_data.get("success"):
+                snapshot["position"] = {
+                    "has_position": position_data["total_open_positions"] > 0,
+                    "total_positions": position_data["total_open_positions"],
+                    "positions": position_data["positions"],
+                    "category": position_data["category"]
+                }
+            else:
+                snapshot["position"] = {
+                    "has_position": False,
+                    "error": position_data.get("error", "Unknown error"),
+                    "message": position_data.get("message", "Failed to fetch position data")
+                }
+        except Exception as e:
+            snapshot["position"] = {
+                "has_position": False,
+                "error": "Exception occurred",
+                "message": str(e)
+            }
+    else:
+        snapshot["position"] = {
+            "has_position": False,
+            "message": "Position checking not enabled or API credentials not configured"
+        }
+    
     return snapshot
 
 def upsert_tables(symbol: str, tf: str, df_raw: pd.DataFrame, df_ind: pd.DataFrame):
@@ -751,9 +781,10 @@ def health():
 @app.get("/v1/run")
 def run(
     symbol: Optional[str] = Query(default=None),
-    tfs: Optional[str] = Query(default=None, description="comma-separated TFs, e.g. 15m,1h,4h,1d"),
+    tfs: Optional[str] = Query(default=None, description="comma-separated TFs, e.g. 5m,15m,1h,1d"),
     lookback: Optional[int] = Query(default=None),
-    category: Optional[str] = Query(default=None, description="bybit category: linear (futures)|spot|inverse")
+    category: Optional[str] = Query(default=None, description="bybit category: linear (futures)|spot|inverse"),
+    include_position: Optional[bool] = Query(default=True, description="include current position data in snapshot")
 ):
     sym = symbol or ENV_SYMBOL
     tf_list = [s.strip() for s in (tfs or ",".join(ENV_TFS)).split(",") if s.strip()]
@@ -788,7 +819,7 @@ def run(
         s = df_ind.iloc[-2] if len(df_ind) >= 2 else df_ind.iloc[-1]
         feature_map[tf] = s
 
-    snapshot = build_snapshot(sym, feature_map, dataframes)
+    snapshot = build_snapshot(sym, feature_map, dataframes, include_position)
 
     if WRITE_SNAPSHOT_JSON:
         try:
